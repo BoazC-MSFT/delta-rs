@@ -31,6 +31,9 @@ parquet = { workspace = true, features = [
     "async",
     "object_store",
 ], optional = true }
+# Decodes a checkpoint's Parquet footer ahead of the reader; version and features match parquet's
+# own thrift dependency so both resolve to a single build.
+thrift = { version = "0.17", default-features = false }
 
 # datafusion
 datafusion = { workspace = true, optional = true }

@@ -109,6 +109,12 @@ impl DeltaTableState {
         {
             use parquet::file::reader::{FileReader, SerializedFileReader};
 
+            if let Some(group) = empty_schema_group(&data) {
+                return Err(DeltaTableError::from(
+                    protocol::ProtocolError::EmptySchemaGroup(group),
+                ));
+            }
+
             let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
@@ -427,6 +433,36 @@ impl DeltaTableState {
     }
 }
 
+/// Name of the first field-less group in a Parquet schema, if the file holds one.
+///
+/// `parquet` treats a group with no fields as a primitive column and panics on its absent physical
+/// type, so the footer is inspected before a reader is built. A footer that cannot be decoded
+/// yields `None`, leaving the reader to report the underlying problem itself.
+#[cfg(feature = "parquet")]
+fn empty_schema_group(data: &[u8]) -> Option<String> {
+    use parquet::file::footer::decode_footer;
+    use parquet::file::FOOTER_SIZE;
+    use parquet::format::FileMetaData as ThriftFileMetaData;
+    use thrift::protocol::{TCompactInputProtocol, TSerializable};
+
+    let footer_start = data.len().checked_sub(FOOTER_SIZE)?;
+    let footer = <&[u8; FOOTER_SIZE]>::try_from(&data[footer_start..]).ok()?;
+    let metadata_start = footer_start.checked_sub(decode_footer(footer).ok()?)?;
+
+    let mut protocol = TCompactInputProtocol::new(&data[metadata_start..footer_start]);
+    let metadata = ThriftFileMetaData::read_from_in_protocol(&mut protocol).ok()?;
+
+    metadata
+        .schema
+        .iter()
+        .find(|element| {
+            matches!(element.num_children, None | Some(0))
+                && element.repetition_type.is_some()
+                && element.type_.is_none()
+        })
+        .map(|element| element.name.clone())
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -520,5 +556,62 @@ mod tests {
         merged_state.merge(state_next, true, true);
 
         assert_eq!(merged_state.files().len(), 0);
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn checkpoint_with_empty_schema_group_is_rejected() {
+        use parquet::basic::{Repetition, Type as PhysicalType};
+        use parquet::data_type::Int32Type;
+        use parquet::file::properties::WriterProperties;
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::types::Type;
+        use std::sync::Arc;
+
+        let empty_group = Arc::new(
+            Type::group_type_builder("protocol")
+                .with_repetition(Repetition::OPTIONAL)
+                .build()
+                .unwrap(),
+        );
+        let marker = Arc::new(
+            Type::primitive_type_builder("marker", PhysicalType::INT32)
+                .with_repetition(Repetition::OPTIONAL)
+                .build()
+                .unwrap(),
+        );
+        let schema = Arc::new(
+            Type::group_type_builder("schema")
+                .with_fields(vec![empty_group, marker])
+                .build()
+                .unwrap(),
+        );
+
+        let mut buffer = Vec::new();
+        let mut writer = SerializedFileWriter::new(
+            &mut buffer,
+            schema,
+            Arc::new(WriterProperties::builder().build()),
+        )
+        .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        while let Some(mut column) = row_group.next_column().unwrap() {
+            column
+                .typed::<Int32Type>()
+                .write_batch(&[1], Some(&[1]), None)
+                .unwrap();
+            column.close().unwrap();
+        }
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let error = DeltaTableState::with_version(0)
+            .process_checkpoint_bytes(bytes::Bytes::from(buffer), &DeltaTableConfig::default())
+            .expect_err("a checkpoint whose schema holds an empty group must be rejected");
+
+        assert!(
+            error.to_string().contains("protocol"),
+            "error should name the offending group, got: {error}"
+        );
     }
 }

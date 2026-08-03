@@ -57,6 +57,10 @@ pub enum ProtocolError {
     #[error("Invalid deletion vector storage type: {0}")]
     InvalidDeletionVectorStorageType(String),
 
+    /// A checkpoint's schema holds a group with no fields, which the parquet reader cannot read.
+    #[error("Checkpoint schema group '{0}' has no fields")]
+    EmptySchemaGroup(String),
+
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
