@@ -36,6 +36,22 @@ pub enum DeltaTableError {
         source: parquet2::error::Error,
     },
 
+    /// Error returned before materializing a checkpoint that is too large to buffer safely.
+    #[error(
+        "Delta checkpoint '{}' is {} bytes, exceeding the limit of {} bytes",
+        .path,
+        .size,
+        .limit
+    )]
+    CheckpointTooLarge {
+        /// Path of the oversized checkpoint file or part.
+        path: object_store::path::Path,
+        /// Checkpoint object size in bytes.
+        size: usize,
+        /// Maximum checkpoint object size in bytes.
+        limit: usize,
+    },
+
     /// Error returned when converting the schema in Arrow format failed.
     #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]

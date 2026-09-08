@@ -23,6 +23,22 @@ use crate::Schema;
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};
 
+#[cfg(any(feature = "parquet", feature = "parquet2"))]
+const MAX_LEGACY_CHECKPOINT_SIZE_BYTES: usize = 16 * 1024 * 1024 * 1024;
+
+#[cfg(any(feature = "parquet", feature = "parquet2"))]
+fn validate_checkpoint_size(path: &Path, size: usize) -> Result<(), DeltaTableError> {
+    if size > MAX_LEGACY_CHECKPOINT_SIZE_BYTES {
+        return Err(DeltaTableError::CheckpointTooLarge {
+            path: path.clone(),
+            size,
+            limit: MAX_LEGACY_CHECKPOINT_SIZE_BYTES,
+        });
+    }
+
+    Ok(())
+}
+
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,7 +181,9 @@ impl DeltaTableState {
         let mut new_state = Self::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
-            let obj = table.storage.get(f).await?.bytes().await?;
+            let result = table.storage.get(f).await?;
+            validate_checkpoint_size(f, result.meta.size)?;
+            let obj = result.bytes().await?;
             new_state.process_checkpoint_bytes(obj, &table.config)?;
         }
 
@@ -469,6 +487,36 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+
+    #[test]
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    fn oversized_checkpoint_is_rejected_before_materialization() {
+        let path = Path::from("_delta_log/00000000000000262430.checkpoint.parquet");
+        let size = MAX_LEGACY_CHECKPOINT_SIZE_BYTES + 1;
+
+        let error = validate_checkpoint_size(&path, size)
+            .expect_err("checkpoint larger than the limit must be rejected");
+
+        assert!(matches!(
+            error,
+            DeltaTableError::CheckpointTooLarge {
+                path: error_path,
+                size: error_size,
+                limit: error_limit,
+            } if error_path == path
+                && error_size == size
+                && error_limit == MAX_LEGACY_CHECKPOINT_SIZE_BYTES
+        ));
+    }
+
+    #[test]
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    fn checkpoint_at_size_limit_is_allowed() {
+        let path = Path::from("_delta_log/00000000000000262430.checkpoint.parquet");
+
+        validate_checkpoint_size(&path, MAX_LEGACY_CHECKPOINT_SIZE_BYTES)
+            .expect("checkpoint at the limit must be allowed");
+    }
 
     #[test]
     fn state_round_trip() {
