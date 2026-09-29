@@ -314,10 +314,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::V2Checkpoint);
     #[cfg(feature = "nanosecond-timestamps")]
     reader_features.insert(TableFeature::TimestampNanos);
-    #[cfg(feature = "datafusion")]
-    {
-        reader_features.insert(TableFeature::ColumnMapping);
-    }
+    reader_features.insert(TableFeature::ColumnMapping);
 
     let mut writer_features = HashSet::new();
     writer_features.insert(TableFeature::AppendOnly);
@@ -333,8 +330,8 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
         writer_features.insert(TableFeature::Invariants);
         writer_features.insert(TableFeature::CheckConstraints);
         writer_features.insert(TableFeature::GeneratedColumns);
-        writer_features.insert(TableFeature::ColumnMapping);
     }
+    writer_features.insert(TableFeature::ColumnMapping);
     writer_features.insert(TableFeature::DeletionVectors);
     // writer_features.insert(TableFeature::IdentityColumns);
 
