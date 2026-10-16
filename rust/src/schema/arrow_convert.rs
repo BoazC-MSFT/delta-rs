@@ -481,7 +481,9 @@ pub(crate) fn delta_log_schema_for_table(
                 ],
                 protocol[
                     minReaderVersion:Int32,
-                    minWriterVersion:Int32
+                    minWriterVersion:Int32,
+                    readerFeatures[element]{Utf8},
+                    writerFeatures[element]{Utf8}
                 ],
                 txn[
                     appId:Utf8,
@@ -668,6 +670,25 @@ mod tests {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
         assert_eq!(5, log_schema.fields().len());
+
+        // verify the protocol struct includes the table features lists.
+        let feature_list = ArrowDataType::List(Arc::new(ArrowField::new(
+            "element",
+            ArrowDataType::Utf8,
+            true,
+        )));
+        assert_eq!(
+            log_schema.field_with_name("protocol").unwrap().data_type(),
+            &ArrowDataType::Struct(
+                vec![
+                    ArrowField::new("minReaderVersion", ArrowDataType::Int32, true),
+                    ArrowField::new("minWriterVersion", ArrowDataType::Int32, true),
+                    ArrowField::new("readerFeatures", feature_list.clone(), true),
+                    ArrowField::new("writerFeatures", feature_list, true),
+                ]
+                .into()
+            )
+        );
 
         // verify add fields match as expected. a lot of transformation goes into these.
         let add_fields: Vec<_> = log_schema
